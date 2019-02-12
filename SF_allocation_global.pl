@@ -292,7 +292,7 @@ sub compute_pdr{
 		my ($n, $sf, $t) = @$tup;
 		my $ran = rand($guard);
 		my $d = distance3d(sqrt($terrain)/2, $ncoords{$n}[0], sqrt($terrain)/2, $ncoords{$n}[1], 10, 0);
-		my $prx = $Ptx - ($Lpld0 + 10*$gamma * log($d/$dref) + $Xs);
+		my $prx = $Ptx - ($Lpld0 + 10*$gamma * log10($d/$dref) + $Xs);
 		my $sta = ($t-1) * (airtime($sf) + 2*$guard) + $ran;
 		my $end = $sta + airtime($sf);
 		my $collided = 0;
@@ -305,7 +305,7 @@ sub compute_pdr{
 			#print "# $n overlaps with $n_ in slot $t ($sf) - $t_ ($sf_)\n";
 			if ( (($sta >= $sta_) && ($sta <= $end_)) || (($end <= $end_) && ($end >= $sta_)) ){
 				my $d_ = distance3d(sqrt($terrain)/2, $ncoords{$n_}[0], sqrt($terrain)/2, $ncoords{$n_}[1], 10, 0);
-				my $prx_ = $Ptx - ($Lpld0 + 10*$gamma * log($d_/$dref) + $Xs);
+				my $prx_ = $Ptx - ($Lpld0 + 10*$gamma * log10($d_/$dref) + $Xs);
 				$prx_ += 7 if ($sf_ == 7);
 				if (($prx - $prx_) <= $thresholds[$sf-7][$sf_-7]){ #
 					$collided = 1;

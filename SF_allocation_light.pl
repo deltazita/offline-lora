@@ -137,7 +137,7 @@ sub min_sf{
 	my $bwi = bwconv($bw);
 	for (my $f=7; $f<=12; $f+=1){
 		my $S = $sflist[$f-7][$bwi];
-# 		my $Prx = $Ptx - ($Lpld0 + 10*$gamma * log($d0/$dref) + $Xs);
+# 		my $Prx = $Ptx - ($Lpld0 + 10*$gamma * log10($d0/$dref) + $Xs);
 # 		exit if ($Prx < $S); # just a test
 		my $d = $dref * 10**( ($Ptx - $S - $Lpld0 - $Xs)/(10*$gamma) );
 		if ($d > $d0){
