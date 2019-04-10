@@ -106,9 +106,13 @@ my $max_time = 0;
 my $max_bar = undef;
 foreach my $tup (@$sched){
 	my ($n, $sf, $t) = @$tup;
-	my $time = ( $slots{$sf} * (int($data{$n}/$pl[$sf-7])-1) + $t ) * (airtime($sf)+2*$guard);
+	my $time = $slots{$sf} * (int($data{$n}/$pl[$sf-7])-1) * (airtime($sf)+2*$guard);
 	my $rem = $data{$n} % $pl[$sf-7];
-	$time += ($slots{$sf} * (airtime($sf)+2*$guard) + airtime($sf, undef, $rem) + $guard) if ($rem > 0);
+	if ($rem > 0){
+		$time += ($slots{$sf} * (airtime($sf)+2*$guard) + airtime($sf, undef, $rem) + $guard);
+	}else{
+		$time += $nodes_per_sf{$sf} * (airtime($sf)+2*$guard) - $guard;
+	}
 	if ($time > $max_time){
 		$max_time = $time;
 		$max_bar = $sf;
