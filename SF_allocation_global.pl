@@ -32,8 +32,11 @@ my %slots = ();
 my %sf_occurances = ();
 my $guard = 0.04;
 my $Ptx_w = 25 * 3.5 / 1000; # 25mA, 3.5V
-my $generate_figure = 1;
-my $non_orthogon = 0; # take into account non-orthogonallity of the transmissions
+my $Prx_w = 22 * 3.5 / 1000; # 22mA
+my $sync_time = 0.05; # 50ms
+my $generate_figure = 0;
+my $simulate_transmissions = 1; # perform a path-loss and collision test
+my $stored_data = 10000;
 
 # for statistics
 my $max_time = 0;
@@ -47,16 +50,13 @@ read_data();
 foreach my $n (keys %ncoords){
 	my $d0 = distance3d(sqrt($terrain)/2, $ncoords{$n}[0], sqrt($terrain)/2, $ncoords{$n}[1], 10, 0);
 	push(@sfs, [$n, min_sf($n, $d0)]);
-# 	my $x = 500;
-# 	$rem_data{$n} = random_uniform_integer(1, 1000-$x/2, 1000+$x/2);
-	$rem_data{$n} = 1024;
 	$can_transmit{$n} = $guard;
 }
 my $start = time;
 @sfs = sf_sorted(\@sfs);
 
 # compute schedule
-my $sched = optimize_times(\@sfs);
+my $sched = optimize_times();
 my $finish = time;
 foreach my $tup (@$sched){
 	my ($n, $sf, $t) = @$tup;
@@ -71,8 +71,6 @@ for (my $F=7; $F<=12; $F+=1){
 		next;
 	}
 	$s = max(keys %{$slots{$F}});
-# 	my $s1 = min(keys %{$slots{$F}});
-# 	print "$s1 $s\n";
 	
 	$time_per_sf{$F} = $s * (airtime($F) + 2*$guard) - $guard;
 	if ($time_per_sf{$F} > $max_time){
@@ -92,8 +90,8 @@ print "Longest time to deliver data: $max_time\n";
 printf "Processing time: %.5f secs\n", $finish-$start;
 printf "Avg node consumption: %.6f J\n", $avg_cons/(scalar keys %ncoords);
 printf "Avg SF: %.3f\n", $gavg_sf/(scalar keys %ncoords);
-$pdr = compute_pdr() if ($non_orthogon == 1);
-print "PDR: $pdr\n";
+$pdr = compute_pdr() if ($simulate_transmissions == 1);
+printf "PDR: %.3f\n", $pdr;
 print "--------------------\n";
 
 draw_schedule() if ($generate_figure);
@@ -121,7 +119,6 @@ sub min_sf{
 }
 
 sub optimize_times{
-	my $sfs = shift;
 	my @schedule = ();
 
 	my @examined = ();
@@ -129,12 +126,12 @@ sub optimize_times{
 	while (scalar @examined < scalar @sfs){
 		if (scalar @temp_sfs == 0){
 			@temp_sfs = @sfs;
-			print "---\n";
+# 			print "---\n";
 		}
 		my $tuple = shift(@temp_sfs);
 		my ($n, $sf) = @$tuple;
 		next if ($rem_data{$n} <= 0);
-		print "# picked $n with SF $sf and rem. data $rem_data{$n}\n";
+# 		print "# picked $n with SF $sf and rem. data $rem_data{$n}\n";
 		
 		# find the best SF pot
 		my $min_F = undef;
@@ -161,7 +158,7 @@ sub optimize_times{
 				$min_slot = $node_slot;
 			}
 		}
-		print "\t selected SF $min_F for $n\n";
+# 		print "\t selected SF $min_F for $n\n";
 		$avg_sf{$n} += $min_F;
 		$ntrans{$n} += 1;
 		$sf_occurances{$min_F} += 1;
@@ -171,7 +168,7 @@ sub optimize_times{
 		push (@schedule, [$n, $min_F, $min_slot]);
 		my $payl = $pl[$min_F-7];
 		$payl = $rem_data{$n} if ($rem_data{$n} < $pl[$min_F-7]);
-		$consumption{$n} += airtime($min_F, $payl) * $Ptx_w;
+		$consumption{$n} += airtime($min_F, $payl) * $Ptx_w + $sync_time * $Prx_w/5;
 		$rem_data{$n} -= $payl;
 		if ((($min_slot-1)*(airtime($min_F)+2*$guard)+$guard) < $can_transmit{$n}){ # duty cycle check
 			exit;
@@ -180,7 +177,7 @@ sub optimize_times{
 			push (@examined, $n);
 		}else{
 			$can_transmit{$n} = ($min_slot-1)*(airtime($min_F)+2*$guard) + $guard + 100*airtime($min_F);
-			print "$n $can_transmit{$n}\n";
+# 			print "$n $can_transmit{$n}\n";
 		}
 	}
 	return \@schedule;
@@ -248,7 +245,7 @@ sub bwconv{
 sub read_data{
 	my $terrain_file = $ARGV[0];
 	open(FH, "<$terrain_file") or die "Error: could not open terrain file $terrain_file\n";
-	my @nodes = ();
+	my @coords = ();
 	while(<FH>){
 		chomp;
 		if (/^# stats: (.*)/){
@@ -260,15 +257,23 @@ sub read_data{
 			$norm_y = sqrt($terrain);
 		} elsif (/^# node coords: (.*)/){
 			my $point_coord = $1;
-			my @coords = split(/\] /, $point_coord);
-			@nodes = map { /([0-9]+) \[([0-9]+\.[0-9]+) ([0-9]+\.[0-9]+)/; [$1, $2, $3]; } @coords;
+			@coords = split(/\] /, $point_coord);
 		}
 	}
 	close(FH);
 	
-	foreach my $node (@nodes){
-		my ($n, $x, $y) = @$node;
-		$ncoords{$n} = [$x, $y];
+	foreach my $line (@coords){
+		$line = substr ($line, 0, -1) if (substr ($line, -1) eq "]");
+		my @el = split(/ \[/, $line);
+		my $n = shift(@el);
+		my @coord = split(/ /, $el[0]);
+		$ncoords{$n} = [$coord[0], $coord[1]];
+		if (scalar @coord == 3){
+			$rem_data{$n} = ceil($coord[2]/$pl[0])*$pl[0]; # let's send full packets
+		}else{
+			$rem_data{$n} = $stored_data;
+# 			$rem_data{$n} = (8 + int(rand(6)))*100;
+		}
 	}
 }
 
@@ -285,41 +290,33 @@ sub distance3d {
 sub compute_pdr{
 	my @thresholds = ([6,-16,-18,-19,-19,-20], [-24,6,-20,-22,-22,-22], [-27,-27,6,-23,-25,-25], [-30,-30,-30,6,-26,-28], [-33,-33,-33,-33,6,-29], [-36,-36,-36,-36,-36,6]); # capture effect power thresholds per SF[SF] for non-orthogonal transmissions
 	my $var = 3.57;
-	my $G = rand(1);
-	my ($dref, $Ptx, $Lpld0, $Xs, $gamma) = (40, 7, 95, $var*$G, 2.08);
-	my $collisions = 0;
+	my ($dref, $Ptx, $Lpld0, $gamma) = (40, 7, 95, 2.08);
+	my $dropped = 0;
 	foreach my $tup (@$sched){
 		my ($n, $sf, $t) = @$tup;
-		my $ran = rand($guard);
+		my $collided = 0;
+		my $lost = 0;
+		my $G = rand(1);
+		my $Xs = $var*$G;
+# 		my $ran = rand($guard);
 		my $d = distance3d(sqrt($terrain)/2, $ncoords{$n}[0], sqrt($terrain)/2, $ncoords{$n}[1], 10, 0);
 		my $prx = $Ptx - ($Lpld0 + 10*$gamma * log10($d/$dref) + $Xs);
-		my $sta = ($t-1) * (airtime($sf) + 2*$guard) + $ran;
-		my $end = $sta + airtime($sf);
-		my $collided = 0;
-		$prx += 7 if ($sf == 7);
-		foreach my $tup_ (@$sched){
-			my ($n_, $sf_, $t_) = @$tup_;
-			my $sta_ = ($t_-1) * (airtime($sf_) + 2*$guard) + $ran;
-			my $end_ = $sta_ + airtime($sf_);
-			next if ( ($n_ == $n) || ($sta_ > $end) || ($end_ < $sta) || ($sf_ == $sf) );
-			#print "# $n overlaps with $n_ in slot $t ($sf) - $t_ ($sf_)\n";
-			if ( (($sta >= $sta_) && ($sta <= $end_)) || (($end <= $end_) && ($end >= $sta_)) ){
-				my $d_ = distance3d(sqrt($terrain)/2, $ncoords{$n_}[0], sqrt($terrain)/2, $ncoords{$n_}[1], 10, 0);
-				my $prx_ = $Ptx - ($Lpld0 + 10*$gamma * log10($d_/$dref) + $Xs);
-				$prx_ += 7 if ($sf_ == 7);
-				if (($prx - $prx_) <= $thresholds[$sf-7][$sf_-7]){ #
-					$collided = 1;
-					print "# $n 's packet lost\n";
-				}
-			}
-			last if ($collided == 1);
+		if ($prx < $sflist[$sf-7][bwconv($bw)]){
+			$lost = 1;
 		}
-		if ($collided == 1){
-			$collisions += 1;
+		$G = rand(1);
+		$Xs = $var*$G;
+		$prx = 14 - ($Lpld0 + 10*$gamma * log10($d/$dref) + $Xs);
+		if ($prx < $sflist[$sf-7][bwconv($bw)]){
+			$lost = 1;
+		}
+		
+		if (($collided == 1) || ($lost == 1)){
+			$dropped += 1;
 		}
 	}
 	
-	return (1 - $collisions/(scalar @$sched));
+	return (1 - $dropped/(scalar @$sched));
 }
 
 sub draw_schedule{

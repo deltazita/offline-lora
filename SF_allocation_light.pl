@@ -25,12 +25,17 @@ my @sfs = ();
 my @sflist = ([7,-124,-122,-116], [8,-127,-125,-119], [9,-130,-128,-122], [10,-133,-130,-125], [11,-135,-132,-128], [12,-137,-135,-129]);
 my $bw = 500;
 my @pl = (100, 100, 100, 100, 100, 100);
+my $stored_data = 10000;
 my %time_per_sf = ();
 my %slots = ();
 my $guard = 0.04;
 my $Ptx_w = 25 * 3.5 / 1000; # 25mA, 3.5V
+my $Prx_w = 22 * 3.5 / 1000; # 22mA
+my $sync_time = 0.05; # 50ms
 my $avg_sf = 0;
-my $generate_figure = 1;
+my $generate_figure = 0;
+my $simulate_transmissions = 1;
+my $pdr = 1.000;
 
 read_data();
 
@@ -43,9 +48,6 @@ foreach my $n (keys %ncoords){
 	if ($f > $max_f){
 		$max_f = $f;
 	}
-# 	my $x = 500;
-# 	$data{$n} = random_uniform_integer(1, 1000-$x/2, 1000+$x/2);
-	$data{$n} = 1024;
 	if ($data{$n} > $max_data){
 		$max_data = $data{$n};
 	}
@@ -117,7 +119,7 @@ foreach my $tup (@$sched){
 		$max_time = $time;
 		$max_bar = $sf;
 	}
-	
+	$consumption{$n} += $sync_time * $Prx_w / 5; # sync consumption every 5 frames
 	$consumption{$n} *= int($data{$n}/$pl[$sf-7]);
 	$consumption{$n} += airtime($sf, undef, $rem) * $Ptx_w if ($rem > 0);
 	$avg_cons += $consumption{$n};
@@ -131,6 +133,9 @@ print "Avg SF: $avg_sf\n";
 print "Downlink time: $down_time secs\n";
 printf "Avg node consumption: %.5f J\n", $avg_cons/(scalar keys %ncoords);
 printf "Processing time: %.6f secs\n", $finish-$start;
+$pdr = compute_pdr() if ($simulate_transmissions == 1);
+printf "PDR: %.3f\n", $pdr;
+
 
 sub min_sf{
 	my ($n, $d0) = @_;
@@ -259,7 +264,7 @@ sub bwconv{
 sub read_data{
 	my $terrain_file = $ARGV[0];
 	open(FH, "<$terrain_file") or die "Error: could not open terrain file $terrain_file\n";
-	my @nodes = ();
+	my @coords = ();
 	while(<FH>){
 		chomp;
 		if (/^# stats: (.*)/){
@@ -271,15 +276,23 @@ sub read_data{
 			$norm_y = sqrt($terrain);
 		} elsif (/^# node coords: (.*)/){
 			my $point_coord = $1;
-			my @coords = split(/\] /, $point_coord);
-			@nodes = map { /([0-9]+) \[([0-9]+\.[0-9]+) ([0-9]+\.[0-9]+)/; [$1, $2, $3]; } @coords;
+			@coords = split(/\] /, $point_coord);
 		}
 	}
 	close(FH);
 	
-	foreach my $node (@nodes){
-		my ($n, $x, $y) = @$node;
-		$ncoords{$n} = [$x, $y];
+	foreach my $line (@coords){
+		$line = substr ($line, 0, -1) if (substr ($line, -1) eq "]");
+		my @el = split(/ \[/, $line);
+		my $n = shift(@el);
+		my @coord = split(/ /, $el[0]);
+		$ncoords{$n} = [$coord[0], $coord[1]];
+		if (scalar @coord == 3){
+			$data{$n} = ceil($coord[2]/$pl[0])*$pl[0]; # let's send full packets
+		}else{
+			$data{$n} = $stored_data;
+# 			$data{$n} = (8 + int(rand(6)))*100;
+		}
 	}
 }
 
@@ -351,4 +364,35 @@ sub draw_schedule{
 	binmode FILEOUT;
 	print FILEOUT $img->svg;
 	close FILEOUT;
+}
+
+sub compute_pdr{ # only the 1st transmmission
+	my @thresholds = ([6,-16,-18,-19,-19,-20], [-24,6,-20,-22,-22,-22], [-27,-27,6,-23,-25,-25], [-30,-30,-30,6,-26,-28], [-33,-33,-33,-33,6,-29], [-36,-36,-36,-36,-36,6]); # capture effect power thresholds per SF[SF] for non-orthogonal transmissions
+	my $var = 3.57;
+	my ($dref, $Ptx, $Lpld0, $gamma) = (40, 7, 95, 2.08);
+	my $dropped = 0;
+	foreach my $tup (@$sched){
+		my ($n, $sf, $t) = @$tup;
+		my $collided = 0;
+		my $lost = 0;
+		my $G = rand(1);
+		my $Xs = $var*$G;
+# 		my $ran = rand($guard);
+		my $d = distance3d(sqrt($terrain)/2, $ncoords{$n}[0], sqrt($terrain)/2, $ncoords{$n}[1], 10, 0);
+		my $prx = $Ptx - ($Lpld0 + 10*$gamma * log10($d/$dref) + $Xs);
+		if ($prx < $sflist[$sf-7][bwconv($bw)]){
+			$collided = 1;
+		}
+		$G = rand(1);
+		$Xs = $var*$G;
+		$prx = 14 - ($Lpld0 + 10*$gamma * log10($d/$dref) + $Xs);
+		if ($prx < $sflist[$sf-7][bwconv($bw)]){
+			$lost = 1;
+		}
+		if (($collided == 1) || ($lost == 1)){
+			$dropped += 1;
+		}
+	}
+	
+	return (1 - $dropped/(scalar @$sched));
 }
