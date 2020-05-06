@@ -25,13 +25,13 @@ my @sfs = ();
 my @sflist = ([7,-124,-122,-116], [8,-127,-125,-119], [9,-130,-128,-122], [10,-133,-130,-125], [11,-135,-132,-128], [12,-137,-135,-129]);
 my $bw = 500;
 my @pl = (100, 100, 100, 100, 100, 100);
-my $stored_data = 10000;
+my $stored_data = 1000;
 my %time_per_sf = ();
 my %slots = ();
-my $guard = 0.04;
-my $Ptx_w = 25 * 3.5 / 1000; # 25mA, 3.5V
-my $Prx_w = 22 * 3.5 / 1000; # 22mA
-my $sync_time = 0.05; # 50ms
+my $guard = 0.01; # secs
+my $Ptx_w = 75 * 3.3 / 1000; # 75mA, 3.3V
+my $Prx_w = 45 * 3.3 / 1000; # 45mA
+my $sync_size = 4; # 4 bytes for synchronisation (only for the calculation of the energy consumption)
 my $avg_sf = 0;
 my $generate_figure = 0;
 my $simulate_transmissions = 1;
@@ -70,23 +70,29 @@ $avg_sf /= (scalar @$sched);
 print "--------------------\n";
 
 my %nodes_per_sf = ();
+my %frame = ();
 foreach my $n (keys %node_sf){
 	$nodes_per_sf{$node_sf{$n}} += 1;
 }
-
 print "# Time, slots & nodes per SF\n";
 for (my $F=7; $F<=12; $F+=1){
-	my $at = airtime($F);
-	# if the bar length doesn't exceed the length imposed by the duty cycle restriction, set it to maximum
-	if (($time_per_sf{$F} < ($at*100)) && ($time_per_sf{$F} > 0)){
-		$slots{$F} = ceil( $at*100 / ($at + 2*$guard) );
-		$time_per_sf{$F} = $slots{$F} * ($at + 2*$guard);
-	}else{ # if it exceeds or no time
-		$time_per_sf{$F} = ($at + 2*$guard) * $slots{$F};
-	}
 	$nodes_per_sf{$F} = 0 if (!exists $nodes_per_sf{$F});
-	printf "%d : %.2f secs, %d slots (%d nodes)\n", $F, $time_per_sf{$F}, $slots{$F}, $nodes_per_sf{$F};
+	my $nodes = $nodes_per_sf{$F}; # slots that are being used in the frame
+	my $at = airtime($F);
+	$frame{$F} = $nodes * ($at + 2*$guard); # total time of a frame
+	$slots{$F} = $nodes; # slots per frame (including empty ones)
+	my $dc = 100*$at;
+	if ($frame{$F} < $dc){
+		$slots{$F} = ceil( $dc / ($at + 2*$guard) );
+		$frame{$F} = $slots{$F} * ($at + 2*$guard);
+	}
+	if ($nodes == 0){
+		$slots{$F} = 0;
+		$frame{$F} = 0;
+	}
+	printf "%d : %.2f secs, %d slots (%d nodes)\n", $F, $frame{$F}, $slots{$F}, $nodes;
 }
+
 print "--------------------\n";
 print "# Downlink time per SF\n";
 my $down_time = 0;
@@ -108,20 +114,15 @@ my $max_time = 0;
 my $max_bar = undef;
 foreach my $tup (@$sched){
 	my ($n, $sf, $t) = @$tup;
-	my $time = $slots{$sf} * (int($data{$n}/$pl[$sf-7])-1) * (airtime($sf)+2*$guard);
-	my $rem = $data{$n} % $pl[$sf-7];
-	if ($rem > 0){
-		$time += ($slots{$sf} * (airtime($sf)+2*$guard) + airtime($sf, undef, $rem) + $guard);
-	}else{
-		$time += $nodes_per_sf{$sf} * (airtime($sf)+2*$guard) - $guard;
-	}
+	my $at = airtime($sf);
+	# we don't count the empty slots and the last guard time of the last frame
+	my $time = (ceil($data{$n}/$pl[$sf-7])-1) * $frame{$sf} + $nodes_per_sf{$sf}*(2*$guard+$at) - $guard;
 	if ($time > $max_time){
 		$max_time = $time;
 		$max_bar = $sf;
 	}
-	$consumption{$n} += $sync_time * $Prx_w / 5; # sync consumption every 5 frames
-	$consumption{$n} *= int($data{$n}/$pl[$sf-7]);
-	$consumption{$n} += airtime($sf, undef, $rem) * $Ptx_w if ($rem > 0);
+	$consumption{$n} = ceil($data{$n}/$pl[$sf-7]) * airtime($sf) * $Ptx_w;
+	$consumption{$n} += (ceil($data{$n}/$pl[$sf-7])-1) * (airtime($sf, $bw, $sync_size)+$guard) * $Prx_w;
 	$avg_cons += $consumption{$n};
 }
 
@@ -195,7 +196,6 @@ sub optimize_times{
 		$slots{$min_F} += 1;
 		
 		$node_sf{$n} = $min_F;
-		$consumption{$n} = airtime($min_F) * $Ptx_w;
 	}
 	return \@schedule;
 }

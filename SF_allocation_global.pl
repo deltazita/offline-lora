@@ -30,13 +30,13 @@ my @pl = (100, 100, 100, 100, 100, 100);
 my %time_per_sf = ();
 my %slots = ();
 my %sf_occurances = ();
-my $guard = 0.04;
-my $Ptx_w = 25 * 3.5 / 1000; # 25mA, 3.5V
-my $Prx_w = 22 * 3.5 / 1000; # 22mA
-my $sync_time = 0.05; # 50ms
+my $guard = 0.01; # this must be adjusted according to the frame size
+my $sync_size = 4; # 4 bytes for synchronisation
+my $Ptx_w = 75 * 3.3 / 1000; # 75mA, 3.3V
+my $Prx_w = 45 * 3.3 / 1000; # 45mA
 my $generate_figure = 0;
 my $simulate_transmissions = 1; # perform a path-loss and collision test
-my $stored_data = 10000;
+my $stored_data = 1000;
 
 # for statistics
 my $max_time = 0;
@@ -50,7 +50,7 @@ read_data();
 foreach my $n (keys %ncoords){
 	my $d0 = distance3d(sqrt($terrain)/2, $ncoords{$n}[0], sqrt($terrain)/2, $ncoords{$n}[1], 10, 0);
 	push(@sfs, [$n, min_sf($n, $d0)]);
-	$can_transmit{$n} = $guard;
+	$can_transmit{$n} = 0;
 }
 my $start = time;
 @sfs = sf_sorted(\@sfs);
@@ -71,7 +71,6 @@ for (my $F=7; $F<=12; $F+=1){
 		next;
 	}
 	$s = max(keys %{$slots{$F}});
-	
 	$time_per_sf{$F} = $s * (airtime($F) + 2*$guard) - $guard;
 	if ($time_per_sf{$F} > $max_time){
 		$max_time = $time_per_sf{$F};
@@ -137,8 +136,9 @@ sub optimize_times{
 		my $min_F = undef;
 		my $min_time = 99999999999999999;
 		my $min_slot = undef;
-		for (my $F=$sf; $F<=12; $F+=1){	
+		for (my $F=$sf; $F<=12; $F+=1){
 			my $at = airtime($F);
+			$can_transmit{$n} += $guard if ($can_transmit{$n} == 0);
 			# convert allowance time to a slot number in pot
 			my $node_slot = ceil( ($can_transmit{$n}-$guard) / ($at + 2*$guard) ) + 1;
 			# search for the first available slot in pot
@@ -168,7 +168,7 @@ sub optimize_times{
 		push (@schedule, [$n, $min_F, $min_slot]);
 		my $payl = $pl[$min_F-7];
 		$payl = $rem_data{$n} if ($rem_data{$n} < $pl[$min_F-7]);
-		$consumption{$n} += airtime($min_F, $payl) * $Ptx_w + $sync_time * $Prx_w/5;
+		$consumption{$n} += airtime($min_F, $payl) * $Ptx_w + (airtime($min_F, $sync_size)+$guard) * $Prx_w; # not 100% precise
 		$rem_data{$n} -= $payl;
 		if ((($min_slot-1)*(airtime($min_F)+2*$guard)+$guard) < $can_transmit{$n}){ # duty cycle check
 			exit;
@@ -176,7 +176,7 @@ sub optimize_times{
 		if ($rem_data{$n} <= 0){
 			push (@examined, $n);
 		}else{
-			$can_transmit{$n} = ($min_slot-1)*(airtime($min_F)+2*$guard) + $guard + 100*airtime($min_F);
+			$can_transmit{$n} = ($min_slot-1)*(airtime($min_F)+2*$guard) + 100*airtime($min_F);
 # 			print "$n $can_transmit{$n}\n";
 		}
 	}
@@ -330,7 +330,7 @@ sub draw_schedule{
 	
 	$img->string(gdGiantFont,10,10,"Global Scheduling",$black);
 	$img->string(gdGiantFont,10,30,"Schedule length: $max_time secs",$black);
-	$img->string(gdGiantFont,10,50,"BW$bw, guard=$guard secs, SF7-12",$black);
+	$img->string(gdGiantFont,10,50,"BW$bw, min_guard=$guard secs, SF7-12",$black);
 	
 	my $start_x = 50;
 	my $start_y = 100;
